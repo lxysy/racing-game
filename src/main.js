@@ -40,6 +40,9 @@ async function init() {
 
   await RAPIER.init();
 
+  // Physics world must be created after RAPIER.init()
+  physicsWorld.init();
+
   // Create track first
   track.create();
 

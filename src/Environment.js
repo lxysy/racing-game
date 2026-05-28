@@ -100,6 +100,8 @@ export class Environment {
     const terrain = new THREE.Mesh(geometry, material);
     terrain.receiveShadow = true;
     this.scene.add(terrain);
+
+    return terrain;
   }
 
   _findNearestTrackT(curve, x, z) {

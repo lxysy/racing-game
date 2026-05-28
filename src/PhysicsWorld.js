@@ -2,6 +2,10 @@ import * as RAPIER from '@dimforge/rapier3d-compat';
 
 export class PhysicsWorld {
   constructor() {
+    this.world = null;
+  }
+
+  init() {
     this.world = new RAPIER.World({ x: 0.0, y: -9.81, z: 0.0 });
   }
 
@@ -14,15 +18,17 @@ export class PhysicsWorld {
     const groundBody = this.world.createRigidBody(bodyDesc);
 
     const pos = geometry.attributes.position;
-    const vertices = [];
+    const vertices = new Float32Array(pos.count * 3);
     for (let i = 0; i < pos.count; i++) {
-      vertices.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+      vertices[i * 3] = pos.getX(i);
+      vertices[i * 3 + 1] = pos.getY(i);
+      vertices[i * 3 + 2] = pos.getZ(i);
     }
 
     const index = geometry.index;
-    const indices = [];
+    const indices = new Uint32Array(index.count);
     for (let i = 0; i < index.count; i++) {
-      indices.push(index.getX(i));
+      indices[i] = index.getX(i);
     }
 
     const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices)
