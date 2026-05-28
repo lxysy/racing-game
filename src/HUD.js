@@ -75,7 +75,7 @@ export class HUD {
   }
 
   update(car) {
-    const speedKmh = Math.abs(car.speed) * 3.6;
+    const speedKmh = Math.abs(car.vehicle.currentVehicleSpeed()) * 3.6;
     const valueEl = document.getElementById('hud-speed-value');
     if (valueEl) {
       valueEl.textContent = Math.round(speedKmh).toString();

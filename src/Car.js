@@ -8,32 +8,27 @@ export class Car {
     this.physicsWorld = physicsWorld;
     this.group = new THREE.Group();
 
-    // Physics objects
     this.chassisBody = null;
     this.vehicle = null;
-    this.wheelIndices = [];
 
     // Wheel meshes (for rotation animation)
     this.wheelNodes = [];
     this.wheelRadius = 0.18;
 
     // Tuning
-    this.maxEngineForce = 800;
-    this.maxBrakeForce = 50;
+    this.maxEngineForce = 500;
+    this.maxBrakeForce = 40;
     this.maxSteerAngle = 0.55;
   }
 
   async load() {
     const loader = new GLTFLoader();
-    const url = '/low_poly_car/scene.gltf';
 
     return new Promise((resolve, reject) => {
-      loader.load(url, (gltf) => {
+      loader.load('/low_poly_car/scene.gltf', (gltf) => {
         const model = gltf.scene;
         model.scale.set(0.01, 0.01, 0.01);
-        // GLTF internal transforms already face +Z
 
-        // Find wheel nodes for animation
         model.traverse((node) => {
           if (node.isObject3D) {
             const name = node.name.toLowerCase();
@@ -65,46 +60,54 @@ export class Car {
 
     // Chassis rigid body
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(0, 0.5, 0)
-      .setLinearDamping(0.05)
-      .setAngularDamping(0.3);
+      .setTranslation(0, 0.6, 0)
+      .setLinearDamping(0.1)
+      .setAngularDamping(0.3)
+      .setCanSleep(false);
     this.chassisBody = world.createRigidBody(bodyDesc);
 
-    // Collider centered on chassis (box)
-    const colliderDesc = RAPIER.ColliderDesc.cuboid(0.7, 0.2, 1.0)
-      .setDensity(1.5)
+    // Chassis collider
+    const colliderDesc = RAPIER.ColliderDesc.cuboid(0.9, 0.2, 2.1)
+      .setDensity(2.0)
       .setFriction(0.3);
     world.createCollider(colliderDesc, this.chassisBody);
 
-    // Vehicle controller with 4 wheels
-    this.vehicle = new RAPIER.DynamicRayCastVehicleController(this.chassisBody);
+    // Vehicle controller via world (auto-registers to world.vehicleControllers)
+    this.vehicle = this.physicsWorld.createVehicleController(this.chassisBody);
+
+    // 4 wheels
+    const w = 0.65; // lateral offset
+    const fz = 0.85; // front axle Z offset
+    const rz = -0.85; // rear axle Z offset
+    const suspension = 0.35;
+    const radius = this.wheelRadius;
 
     const wheelConfigs = [
-      { connection: { x: -0.6, y: -0.15, z: 0.75 } },   // FL
-      { connection: { x: 0.6, y: -0.15, z: 0.75 } },    // FR
-      { connection: { x: -0.6, y: -0.15, z: -0.75 } },  // RL
-      { connection: { x: 0.6, y: -0.15, z: -0.75 } },   // RR
+      { pos: { x: -w, y: -0.15, z: fz } }, // FL
+      { pos: { x:  w, y: -0.15, z: fz } }, // FR
+      { pos: { x: -w, y: -0.15, z: rz } }, // RL
+      { pos: { x:  w, y: -0.15, z: rz } }, // RR
     ];
 
     for (const cfg of wheelConfigs) {
-      const idx = this.vehicle.addWheel(
-        cfg.connection,
-        { x: 0.0, y: -1.0, z: 0.0 },  // suspension direction (down)
-        { x: -1.0, y: 0.0, z: 0.0 },  // axle direction
-        0.35,                          // suspension rest length
-        this.wheelRadius,
+      this.vehicle.addWheel(
+        cfg.pos,
+        { x: 0, y: -1, z: 0 },   // suspension direction (down)
+        { x: -1, y: 0, z: 0 },   // axle (X axis)
+        suspension,
+        radius,
       );
-      this.wheelIndices.push(idx);
     }
 
-    // Suspension tuning (same for all 4 wheels)
+    // Suspension tuning
     for (let i = 0; i < 4; i++) {
-      this.vehicle.setWheelSuspensionStiffness(i, 35.0);
-      this.vehicle.setWheelSuspensionCompression(i, 5.0);
-      this.vehicle.setWheelSuspensionRelaxation(i, 5.0);
+      this.vehicle.setWheelSuspensionStiffness(i, 40.0);
+      this.vehicle.setWheelSuspensionCompression(i, 6.0);
+      this.vehicle.setWheelSuspensionRelaxation(i, 6.0);
       this.vehicle.setWheelMaxSuspensionTravel(i, 0.3);
-      this.vehicle.setWheelFrictionSlip(i, 10.5);
-      this.vehicle.setWheelMaxSuspensionForce(i, 10000.0);
+      this.vehicle.setWheelMaxSuspensionForce(i, 15000.0);
+      this.vehicle.setWheelFrictionSlip(i, 10.0);
+      this.vehicle.setWheelSideFrictionStiffness(i, 1.0);
     }
   }
 
@@ -117,52 +120,50 @@ export class Car {
     );
     this.chassisBody.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
 
-    // Sync Three.js group
     this.group.position.set(position.x, position.y + 0.6, position.z);
     this.group.quaternion.copy(q);
   }
 
   update(dt, input) {
-    const steerInput = (input.left ? -1 : 0) + (input.right ? 1 : 0);
+    const steer = (input.left ? -1 : 0) + (input.right ? 1 : 0);
 
-    // Steering — only front wheels
-    const targetSteer = steerInput * this.maxSteerAngle;
-    this.vehicle.setWheelSteering(0, targetSteer);
-    this.vehicle.setWheelSteering(1, targetSteer);
+    // Steering (front wheels: 0=FL, 1=FR)
+    this.vehicle.setWheelSteering(0, steer * this.maxSteerAngle);
+    this.vehicle.setWheelSteering(1, steer * this.maxSteerAngle);
 
-    // Engine / Brake
-    if (input.forward) {
-      for (let i = 0; i < 4; i++) {
+    // Rear wheels (2, 3) always straight
+    this.vehicle.setWheelSteering(2, 0);
+    this.vehicle.setWheelSteering(3, 0);
+
+    const speed = this.vehicle.currentVehicleSpeed();
+    const sign = speed >= 0 ? 1 : -1;
+
+    // Engine / Brake per wheel
+    for (let i = 0; i < 4; i++) {
+      if (input.forward) {
         this.vehicle.setWheelEngineForce(i, this.maxEngineForce);
         this.vehicle.setWheelBrake(i, 0.0);
-      }
-    } else if (input.backward) {
-      const speed = this.vehicle.currentVehicleSpeed();
-      if (speed > 0.5) {
-        // Brake
-        for (let i = 0; i < 4; i++) {
+      } else if (input.backward) {
+        if (speed > 0.5) {
           this.vehicle.setWheelEngineForce(i, 0.0);
           this.vehicle.setWheelBrake(i, this.maxBrakeForce);
-        }
-      } else {
-        // Reverse
-        for (let i = 0; i < 4; i++) {
-          this.vehicle.setWheelEngineForce(i, -this.maxEngineForce * 0.3);
+        } else {
+          this.vehicle.setWheelEngineForce(i, -this.maxEngineForce * 0.4);
           this.vehicle.setWheelBrake(i, 0.0);
         }
-      }
-    } else {
-      // Coast — light resistance
-      for (let i = 0; i < 4; i++) {
+      } else {
         this.vehicle.setWheelEngineForce(i, 0.0);
-        this.vehicle.setWheelBrake(i, 2.0);
+        this.vehicle.setWheelBrake(i, 1.5);
       }
     }
 
     // Step physics
     this.physicsWorld.step(dt);
 
-    // Sync Three.js from physics chassis
+    // Update vehicle after step
+    this.vehicle.updateVehicle(dt);
+
+    // Sync Three.js
     this._syncTransform();
 
     // Spin wheels visually
@@ -186,8 +187,9 @@ export class Car {
 
   getForward() {
     const rot = this.chassisBody.rotation();
-    const q = new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
-    return new THREE.Vector3(0, 0, 1).applyQuaternion(q).normalize();
+    return new THREE.Vector3(0, 0, 1)
+      .applyQuaternion(new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w))
+      .normalize();
   }
 
   getPosition() {

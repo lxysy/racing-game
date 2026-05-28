@@ -3,12 +3,15 @@ import * as RAPIER from '@dimforge/rapier3d-compat';
 export class PhysicsWorld {
   constructor() {
     this.world = new RAPIER.World({ x: 0.0, y: -9.81, z: 0.0 });
-    this.groundBody = null;
+  }
+
+  createVehicleController(chassis) {
+    return this.world.createVehicleController(chassis);
   }
 
   addTerrainCollider(geometry) {
     const bodyDesc = RAPIER.RigidBodyDesc.fixed();
-    this.groundBody = this.world.createRigidBody(bodyDesc);
+    const groundBody = this.world.createRigidBody(bodyDesc);
 
     const pos = geometry.attributes.position;
     const vertices = [];
@@ -24,10 +27,11 @@ export class PhysicsWorld {
 
     const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices)
       .setFriction(0.8);
-    this.world.createCollider(colliderDesc, this.groundBody);
+    this.world.createCollider(colliderDesc, groundBody);
   }
 
   step(dt) {
-    this.world.step(dt);
+    this.world.timestep = dt;
+    this.world.step();
   }
 }
