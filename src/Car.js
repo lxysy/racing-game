@@ -16,9 +16,10 @@ export class Car {
     this.wheelRadius = 0.18;
 
     // Tuning
-    this.maxEngineForce = 1500;
-    this.maxBrakeForce = 100;
-    this.maxSteerAngle = 0.6;
+    this.maxEngineForce = 350;
+    this.maxBrakeForce = 50;
+    this.maxSteerAngle = 0.5;
+    this.topSpeed = 55; // m/s (~200 km/h)
   }
 
   async load() {
@@ -58,60 +59,56 @@ export class Car {
   _initPhysics() {
     const world = this.physicsWorld.world;
 
-    // Chassis rigid body
+    // Chassis rigid body — medium weight for feel
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(0, 0.6, 0)
-      .setLinearDamping(0.1)
-      .setAngularDamping(0.3)
+      .setTranslation(0, 2.0, 0)
+      .setLinearDamping(0.3)
+      .setAngularDamping(1.5)
       .setCanSleep(false);
     this.chassisBody = world.createRigidBody(bodyDesc);
 
     // Chassis collider
     const colliderDesc = RAPIER.ColliderDesc.cuboid(0.9, 0.2, 2.1)
-      .setDensity(2.0)
-      .setFriction(0.3);
+      .setDensity(25.0)
+      .setFriction(0.4);
     world.createCollider(colliderDesc, this.chassisBody);
 
-    // Vehicle controller via world (auto-registers to world.vehicleControllers)
+    // Vehicle controller via world
     this.vehicle = this.physicsWorld.createVehicleController(this.chassisBody);
-
-    // Set forward axis to Z (game forward), up to Y
     this.vehicle.setIndexForwardAxis = 2;
     this.vehicle.indexUpAxis = 1;
 
     // 4 wheels
-    const w = 0.65; // lateral offset
-    const fz = 0.85; // front axle Z offset
-    const rz = -0.85; // rear axle Z offset
-    const suspension = 0.35;
-    const radius = this.wheelRadius;
+    const w = 0.65;
+    const fz = 0.85;
+    const rz = -0.85;
 
     const wheelConfigs = [
-      { pos: { x: -w, y: -0.15, z: fz } }, // FL
-      { pos: { x:  w, y: -0.15, z: fz } }, // FR
-      { pos: { x: -w, y: -0.15, z: rz } }, // RL
-      { pos: { x:  w, y: -0.15, z: rz } }, // RR
+      { x: -w, y: -0.15, z: fz }, // FL
+      { x:  w, y: -0.15, z: fz }, // FR
+      { x: -w, y: -0.15, z: rz }, // RL
+      { x:  w, y: -0.15, z: rz }, // RR
     ];
 
     for (const cfg of wheelConfigs) {
       this.vehicle.addWheel(
-        cfg.pos,
-        { x: 0, y: -1, z: 0 },   // suspension direction (down)
-        { x: -1, y: 0, z: 0 },   // axle (X axis)
-        suspension,
-        radius,
+        cfg,
+        { x: 0, y: -1, z: 0 },
+        { x: -1, y: 0, z: 0 },
+        0.35,
+        this.wheelRadius,
       );
     }
 
-    // Suspension tuning
+    // Suspension
     for (let i = 0; i < 4; i++) {
-      this.vehicle.setWheelSuspensionStiffness(i, 40.0);
-      this.vehicle.setWheelSuspensionCompression(i, 6.0);
-      this.vehicle.setWheelSuspensionRelaxation(i, 6.0);
-      this.vehicle.setWheelMaxSuspensionTravel(i, 0.3);
-      this.vehicle.setWheelMaxSuspensionForce(i, 15000.0);
-      this.vehicle.setWheelFrictionSlip(i, 10.0);
-      this.vehicle.setWheelSideFrictionStiffness(i, 1.0);
+      this.vehicle.setWheelSuspensionStiffness(i, 60.0);
+      this.vehicle.setWheelSuspensionCompression(i, 8.0);
+      this.vehicle.setWheelSuspensionRelaxation(i, 8.0);
+      this.vehicle.setWheelMaxSuspensionTravel(i, 0.25);
+      this.vehicle.setWheelMaxSuspensionForce(i, 20000.0);
+      this.vehicle.setWheelFrictionSlip(i, 6.0);
+      this.vehicle.setWheelSideFrictionStiffness(i, 1.5);
     }
   }
 
@@ -139,25 +136,27 @@ export class Car {
     this.vehicle.setWheelSteering(2, 0);
     this.vehicle.setWheelSteering(3, 0);
 
-    const speed = this.vehicle.currentVehicleSpeed();
-    const sign = speed >= 0 ? 1 : -1;
+    const absSpeed = Math.abs(this.vehicle.currentVehicleSpeed());
 
-    // Engine / Brake per wheel
+    // Torque curve: full power up to 30% top speed, then tapers
+    const torqueRatio = 1.0 - Math.max(0, (absSpeed - this.topSpeed * 0.3) / (this.topSpeed * 0.7)) * 0.75;
+    const effectiveForce = this.maxEngineForce * Math.max(torqueRatio, 0.25);
+
     for (let i = 0; i < 4; i++) {
       if (input.forward) {
-        this.vehicle.setWheelEngineForce(i, this.maxEngineForce);
+        this.vehicle.setWheelEngineForce(i, effectiveForce);
         this.vehicle.setWheelBrake(i, 0.0);
       } else if (input.backward) {
-        if (speed > 0.5) {
+        if (absSpeed > 0.5) {
           this.vehicle.setWheelEngineForce(i, 0.0);
           this.vehicle.setWheelBrake(i, this.maxBrakeForce);
         } else {
-          this.vehicle.setWheelEngineForce(i, -this.maxEngineForce * 0.4);
+          this.vehicle.setWheelEngineForce(i, -this.maxEngineForce * 0.3);
           this.vehicle.setWheelBrake(i, 0.0);
         }
       } else {
         this.vehicle.setWheelEngineForce(i, 0.0);
-        this.vehicle.setWheelBrake(i, 1.5);
+        this.vehicle.setWheelBrake(i, 3.0);
       }
     }
 
@@ -202,6 +201,6 @@ export class Car {
   }
 
   getSpeedRatio() {
-    return Math.min(Math.abs(this.vehicle.currentVehicleSpeed()) / 50, 1);
+    return Math.min(Math.abs(this.vehicle.currentVehicleSpeed()) / this.topSpeed, 1);
   }
 }
