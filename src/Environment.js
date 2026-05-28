@@ -9,8 +9,12 @@ export class Environment {
   create(trackCurve) {
     this._createSky();
     this._createLighting();
-    this._createTerrain(trackCurve);
+    this.terrainMesh = this._createTerrain(trackCurve);
     this._createTrees(trackCurve);
+  }
+
+  getTerrainGeometry() {
+    return this.terrainMesh?.geometry;
   }
 
   _createSky() {
@@ -73,7 +77,7 @@ export class Environment {
         }
       }
 
-      positions.setZ(i, height);
+      positions.setY(i, height);
 
       // Vertex color: green (low) to brown (high)
       const h = (height + 10) / 20; // normalize roughly 0-1

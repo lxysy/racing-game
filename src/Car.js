@@ -1,34 +1,26 @@
 import * as THREE from 'three';
+import * as RAPIER from '@dimforge/rapier3d-compat';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 export class Car {
-  constructor(scene) {
+  constructor(scene, physicsWorld) {
     this.scene = scene;
+    this.physicsWorld = physicsWorld;
     this.group = new THREE.Group();
 
-    // Physics state
-    this.speed = 0;
-    this.maxSpeed = 50;
-    this.accelForce = 22;
-    this.brakeForce = 30;
+    // Physics objects
+    this.chassisBody = null;
+    this.vehicle = null;
+    this.wheelIndices = [];
 
-    // Air resistance (quadratic drag) — makes high speed feel different
-    this.dragCoeff = 0.001;
-    // Rolling resistance — natural deceleration when coasting
-    this.rollResistance = 1.5;
-
-    this.yaw = 0; // rotation around Y axis, 0 = facing +Z
-    this.position = new THREE.Vector3(0, 0, 0);
-
-    // Wheel references (for rotation animation)
+    // Wheel meshes (for rotation animation)
     this.wheelNodes = [];
-    this.wheelRadius = 0.35;
+    this.wheelRadius = 0.18;
 
-    // Visual effects state
-    this.currentLean = 0;
-    this.currentPitch = 0;
-    this.leanSpeed = 4;
-    this.maxLean = 0.15;
+    // Tuning
+    this.maxEngineForce = 800;
+    this.maxBrakeForce = 50;
+    this.maxSteerAngle = 0.55;
   }
 
   async load() {
@@ -38,17 +30,14 @@ export class Car {
     return new Promise((resolve, reject) => {
       loader.load(url, (gltf) => {
         const model = gltf.scene;
-
-        // Scale down — the model is in large units
         model.scale.set(0.01, 0.01, 0.01);
-        // GLTF 内部变换已将车头朝向 +Z，无需额外旋转
+        // GLTF internal transforms already face +Z
 
-        // Find wheel nodes by name and enable matrix auto-update
+        // Find wheel nodes for animation
         model.traverse((node) => {
           if (node.isObject3D) {
             const name = node.name.toLowerCase();
             if (name.startsWith('wr') || name.startsWith('wf')) {
-              // Decompose matrix so we can animate rotation
               node.matrixAutoUpdate = true;
               node.matrix.decompose(node.position, node.quaternion, node.scale);
               this.wheelNodes.push(node);
@@ -63,123 +52,150 @@ export class Car {
         this.model = model;
         this.group.add(model);
         this.scene.add(this.group);
+
+        this._initPhysics();
+
         resolve();
       }, undefined, reject);
     });
   }
 
-  update(dt, input) {
-    const prevSpeed = this.speed;
+  _initPhysics() {
+    const world = this.physicsWorld.world;
 
-    // --- Engine torque curve ---
-    let engineForce = 0;
+    // Chassis rigid body
+    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(0, 0.5, 0)
+      .setLinearDamping(0.05)
+      .setAngularDamping(0.3);
+    this.chassisBody = world.createRigidBody(bodyDesc);
 
-    if (input.forward) {
-      // Torque drops as speed increases (more realistic feel)
-      const torqueFactor = 1 - (this.speed / this.maxSpeed) * 0.55;
-      engineForce = this.accelForce * Math.max(torqueFactor, 0.15);
+    // Collider centered on chassis (box)
+    const colliderDesc = RAPIER.ColliderDesc.cuboid(0.7, 0.2, 1.0)
+      .setDensity(1.5)
+      .setFriction(0.3);
+    world.createCollider(colliderDesc, this.chassisBody);
+
+    // Vehicle controller with 4 wheels
+    this.vehicle = new RAPIER.DynamicRayCastVehicleController(this.chassisBody);
+
+    const wheelConfigs = [
+      { connection: { x: -0.6, y: -0.15, z: 0.75 } },   // FL
+      { connection: { x: 0.6, y: -0.15, z: 0.75 } },    // FR
+      { connection: { x: -0.6, y: -0.15, z: -0.75 } },  // RL
+      { connection: { x: 0.6, y: -0.15, z: -0.75 } },   // RR
+    ];
+
+    for (const cfg of wheelConfigs) {
+      const idx = this.vehicle.addWheel(
+        cfg.connection,
+        { x: 0.0, y: -1.0, z: 0.0 },  // suspension direction (down)
+        { x: -1.0, y: 0.0, z: 0.0 },  // axle direction
+        0.35,                          // suspension rest length
+        this.wheelRadius,
+      );
+      this.wheelIndices.push(idx);
     }
 
-    if (input.backward) {
-      if (this.speed > 0) {
-        // Braking
-        engineForce = -this.brakeForce;
+    // Suspension tuning (same for all 4 wheels)
+    for (let i = 0; i < 4; i++) {
+      this.vehicle.setWheelSuspensionStiffness(i, 35.0);
+      this.vehicle.setWheelSuspensionCompression(i, 5.0);
+      this.vehicle.setWheelSuspensionRelaxation(i, 5.0);
+      this.vehicle.setWheelMaxSuspensionTravel(i, 0.3);
+      this.vehicle.setWheelFrictionSlip(i, 10.5);
+      this.vehicle.setWheelMaxSuspensionForce(i, 10000.0);
+    }
+  }
+
+  setInitialTransform(position, yaw) {
+    const q = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0), yaw,
+    );
+    this.chassisBody.setTranslation(
+      { x: position.x, y: position.y + 0.6, z: position.z }, true,
+    );
+    this.chassisBody.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
+
+    // Sync Three.js group
+    this.group.position.set(position.x, position.y + 0.6, position.z);
+    this.group.quaternion.copy(q);
+  }
+
+  update(dt, input) {
+    const steerInput = (input.left ? -1 : 0) + (input.right ? 1 : 0);
+
+    // Steering — only front wheels
+    const targetSteer = steerInput * this.maxSteerAngle;
+    this.vehicle.setWheelSteering(0, targetSteer);
+    this.vehicle.setWheelSteering(1, targetSteer);
+
+    // Engine / Brake
+    if (input.forward) {
+      for (let i = 0; i < 4; i++) {
+        this.vehicle.setWheelEngineForce(i, this.maxEngineForce);
+        this.vehicle.setWheelBrake(i, 0.0);
+      }
+    } else if (input.backward) {
+      const speed = this.vehicle.currentVehicleSpeed();
+      if (speed > 0.5) {
+        // Brake
+        for (let i = 0; i < 4; i++) {
+          this.vehicle.setWheelEngineForce(i, 0.0);
+          this.vehicle.setWheelBrake(i, this.maxBrakeForce);
+        }
       } else {
         // Reverse
-        const torqueFactor = 1 - (Math.abs(this.speed) / (this.maxSpeed * 0.3)) * 0.5;
-        engineForce = -this.accelForce * 0.35 * Math.max(torqueFactor, 0.2);
+        for (let i = 0; i < 4; i++) {
+          this.vehicle.setWheelEngineForce(i, -this.maxEngineForce * 0.3);
+          this.vehicle.setWheelBrake(i, 0.0);
+        }
+      }
+    } else {
+      // Coast — light resistance
+      for (let i = 0; i < 4; i++) {
+        this.vehicle.setWheelEngineForce(i, 0.0);
+        this.vehicle.setWheelBrake(i, 2.0);
       }
     }
 
-    // Apply engine force
-    this.speed += engineForce * dt;
+    // Step physics
+    this.physicsWorld.step(dt);
 
-    // --- Resistances ---
-    const sign = this.speed > 0 ? 1 : -1;
-    const absSpeed = Math.abs(this.speed);
+    // Sync Three.js from physics chassis
+    this._syncTransform();
 
-    // Aerodynamic drag (quadratic — proportional to v²)
-    const dragForce = this.dragCoeff * absSpeed * absSpeed;
-
-    // Rolling resistance (linear — always opposes motion)
-    const rollForce = this.rollResistance;
-
-    // Coasting: if no pedal input, apply both drag + rolling resistance
-    // If pedals are active, only apply drag (engine handles the rest)
-    const coasting = !input.forward && !input.backward;
-    if (coasting) {
-      const totalResistance = Math.min(dragForce + rollForce, absSpeed / dt);
-      this.speed -= sign * totalResistance * dt;
-      if (Math.abs(this.speed) < 0.05) this.speed = 0;
-    } else if (input.forward) {
-      // Drag while accelerating (high speed feels different)
-      this.speed -= sign * dragForce * dt;
-    }
-
-    // Clamp speed
-    if (this.speed > this.maxSpeed) this.speed = this.maxSpeed;
-    if (this.speed < -this.maxSpeed * 0.3) this.speed = -this.maxSpeed * 0.3;
-
-    // --- Steering ---
-    const speedFactor = Math.max(Math.min(absSpeed / 8, 1), 0.3);
-    const steerInput = (input.left ? -1 : 0) + (input.right ? 1 : 0);
-    let steerAmount = steerInput * 2.0 * dt * speedFactor * (this.speed < 0 ? -1 : 1);
-
-    // Understeer at very high speed (less effective steering)
-    const understeerFactor = 1 - (absSpeed / this.maxSpeed) * 0.35;
-    steerAmount *= Math.max(understeerFactor, 0.45);
-
-    this.yaw -= steerAmount;
-
-    // --- Movement ---
-    const forward = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    this.position.addScaledVector(forward, this.speed * dt);
-
-    // Update group transform
-    this.group.position.copy(this.position);
-    this.group.rotation.y = this.yaw;
-
-    // --- Visual effects ---
-    this._updateVisualEffects(dt, steerInput, prevSpeed);
-
-    // --- Wheel rotation ---
+    // Spin wheels visually
     this._rotateWheels(dt);
   }
 
-  _updateVisualEffects(dt, steerInput, prevSpeed) {
-    // Body lean during turns
-    // steerInput > 0 → car turns left → lean right (outward) → negative lean
-    const speedFactor = Math.max(Math.min(Math.abs(this.speed) / 8, 1), 0.3);
-    const targetLean = -steerInput * this.maxLean * speedFactor;
-    this.currentLean += (targetLean - this.currentLean) * Math.min(1, this.leanSpeed * dt);
-
-    // Nose dive/squat during braking/acceleration
-    const accel = (this.speed - prevSpeed) / dt;
-    // positive accel → squat (nose up) → negative pitch
-    // negative accel (braking) → dive (nose down) → positive pitch
-    const targetPitch = -accel * 0.002;
-    this.currentPitch += (targetPitch - this.currentPitch) * Math.min(1, 5 * dt);
-
-    // Apply to model (Euler XYZ order)
-    this.model.rotation.set(this.currentPitch, 0, this.currentLean);
+  _syncTransform() {
+    const pos = this.chassisBody.translation();
+    const rot = this.chassisBody.rotation();
+    this.group.position.set(pos.x, pos.y, pos.z);
+    this.group.quaternion.set(rot.x, rot.y, rot.z, rot.w);
   }
 
   _rotateWheels(dt) {
-    const rotationSpeed = this.speed * dt / this.wheelRadius;
+    const speed = this.vehicle.currentVehicleSpeed();
+    const spin = speed * dt / this.wheelRadius;
     for (const wheel of this.wheelNodes) {
-      wheel.rotation.x += rotationSpeed;
+      wheel.rotation.x += spin;
     }
   }
 
   getForward() {
-    return new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    const rot = this.chassisBody.rotation();
+    const q = new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
+    return new THREE.Vector3(0, 0, 1).applyQuaternion(q).normalize();
   }
 
   getPosition() {
-    return this.position.clone();
+    const p = this.chassisBody.translation();
+    return new THREE.Vector3(p.x, p.y, p.z);
   }
 
   getSpeedRatio() {
-    return Math.abs(this.speed) / this.maxSpeed;
+    return Math.min(Math.abs(this.vehicle.currentVehicleSpeed()) / 50, 1);
   }
 }
