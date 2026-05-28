@@ -16,9 +16,9 @@ export class Car {
     this.wheelRadius = 0.18;
 
     // Tuning
-    this.maxEngineForce = 500;
-    this.maxBrakeForce = 40;
-    this.maxSteerAngle = 0.55;
+    this.maxEngineForce = 1500;
+    this.maxBrakeForce = 100;
+    this.maxSteerAngle = 0.6;
   }
 
   async load() {
@@ -74,6 +74,10 @@ export class Car {
 
     // Vehicle controller via world (auto-registers to world.vehicleControllers)
     this.vehicle = this.physicsWorld.createVehicleController(this.chassisBody);
+
+    // Set forward axis to Z (game forward), up to Y
+    this.vehicle.setIndexForwardAxis = 2;
+    this.vehicle.indexUpAxis = 1;
 
     // 4 wheels
     const w = 0.65; // lateral offset
@@ -157,11 +161,11 @@ export class Car {
       }
     }
 
-    // Step physics
-    this.physicsWorld.step(dt);
-
-    // Update vehicle after step
+    // Update vehicle first: applies wheel suspension + engine forces to chassis
     this.vehicle.updateVehicle(dt);
+
+    // Then step the world to integrate forces
+    this.physicsWorld.step(dt);
 
     // Sync Three.js
     this._syncTransform();
