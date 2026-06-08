@@ -45,16 +45,18 @@ jobs:
 
       - name: Push to Gitee
         run: |
-          echo "=== Test SSH to Gitee ==="
-          ssh -o StrictHostKeyChecking=no -T git@gitee.com || true
-          echo "=== Add remote ==="
+          echo "=== 1. Test SSH ==="
+          ssh -v -o StrictHostKeyChecking=no -T git@gitee.com 2>&1 | tail -20
+          echo ""
+          echo "=== 2. Configure git ==="
+          git config user.email "lxysy@users.noreply.github.com"
+          git config user.name "lxysy"
+          echo "=== 3. Add remote ==="
           git remote add gitee git@gitee.com:lx_ysy/racing-game.git
-          git remote -v
-          echo "=== Git config ==="
-          git config user.name
-          git config user.email
-          echo "=== Current branch ==="
-          git branch -a
-          echo "=== Push to Gitee ==="
-          git push --force gitee HEAD:master 2>&1
+          echo "=== 4. Try fetch ==="
+          GIT_SSH_COMMAND="ssh -v -o StrictHostKeyChecking=no" git fetch gitee 2>&1 | tail -30
+          echo ""
+          echo "=== 5. Try push ==="
+          GIT_SSH_COMMAND="ssh -v -o StrictHostKeyChecking=no" git push --force gitee HEAD:master 2>&1 | tail -30
+          echo "=== DONE ==="
 
