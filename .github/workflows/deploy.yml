@@ -45,9 +45,16 @@ jobs:
 
       - name: Push to Gitee
         run: |
+          echo "=== Test SSH to Gitee ==="
+          ssh -o StrictHostKeyChecking=no -T git@gitee.com || true
+          echo "=== Add remote ==="
           git remote add gitee git@gitee.com:lx_ysy/racing-game.git
           git remote -v
-          git push --force gitee HEAD:master
-        env:
-          GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=no
+          echo "=== Git config ==="
+          git config user.name
+          git config user.email
+          echo "=== Current branch ==="
+          git branch -a
+          echo "=== Push to Gitee ==="
+          git push --force gitee HEAD:master 2>&1
 
