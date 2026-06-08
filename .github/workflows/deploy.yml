@@ -6,7 +6,7 @@ on:
 
 # 赋予 GITHUB_TOKEN 部署 Pages 的权限
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
