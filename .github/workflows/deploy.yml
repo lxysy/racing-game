@@ -1,0 +1,53 @@
+name: Build, Deploy & Sync
+
+on:
+  push:
+    branches: [master]
+
+# 赋予 GITHUB_TOKEN 部署 Pages 的权限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy-and-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # ─── 部署到 GitHub Pages ──────────────────────
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+
+      # ─── 同步源码到 Gitee ─────────────────────────
+      - name: Setup SSH for Gitee
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.GITEE_SSH_PRIVATE_KEY }}
+
+      - name: Push to Gitee
+        run: |
+          git remote add gitee git@gitee.com:lx_ysy/racing-game.git
+          git remote -v
+          git push gitee HEAD:master
+        env:
+          GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=no
+
