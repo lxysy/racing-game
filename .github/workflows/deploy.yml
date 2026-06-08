@@ -47,7 +47,7 @@ jobs:
         run: |
           git remote add gitee git@gitee.com:lx_ysy/racing-game.git
           git remote -v
-          git push gitee HEAD:master
+          git push --force gitee HEAD:master
         env:
           GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=no
 
